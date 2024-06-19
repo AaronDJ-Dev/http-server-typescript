@@ -1,158 +1,90 @@
-import * as fs from "fs";
 import * as net from "net";
+import { argv } from "process";
+import { readFileSync, writeFileSync } from "fs";
 import * as path from "path";
+import * as zlib from "zlib";
 
-// Function to display help message
-function displayHelp() {
-	console.log(`Usage: node main.js [--directory <directory>] [--help | -h]
+const directory = process.argv[3];
 
-Options:
-  --directory <directory>  Serve files from the specified directory.
-  --help, -h               Show this help message and exit.
-`);
-	process.exit(0);
-}
+const server = net.createServer((socket: net.Socket) => {
+  socket.on("data", (data) => {
+    console.log(data);
+    console.log(data.toString());
 
-// Parse command line arguments
-const args = process.argv.slice(2);
-let directory = process.cwd(); // Default directory
+    const [method, path, version] = data.toString().split("\r\n")[0].split(" ");
 
-if (args.includes("--help") || args.includes("-h")) {
-	displayHelp();
-}
+    if (path === "/") {
+      socket.write("HTTP/1.1 200 OK\r\n\r\n");
+    } else if (path.startsWith("/echo/")) {
+      const message = path.split("/")[2];
+      const reqHeaders = data.toString().split("\r\n");
+      const acceptEncodingHeader = reqHeaders.find((header) =>
+        header.startsWith("Accept-Encoding")
+      );
+      const acceptEncoding = acceptEncodingHeader ? acceptEncodingHeader.split(": ")[1] : "";
 
-const directoryFlagIndex = args.indexOf("--directory");
-if (directoryFlagIndex !== -1 && directoryFlagIndex < args.length - 1) {
-	directory = args[directoryFlagIndex + 1];
-} else if (directoryFlagIndex !== -1) {
-	console.error("Error: --directory flag requires a directory path");
-	displayHelp();
-}
+      const buffer = Buffer.from(message, "utf8");
 
-const server = net.createServer((socket) => {
-	console.log("client connected");
+      if (acceptEncoding.includes("gzip")) {
+        const zipped = zlib.gzipSync(buffer);
 
-	socket.on("end", () => {
-		console.log("client disconnected");
-	});
+        socket.write(
+          `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: ${zipped.length}\r\n\r\n`
+        );
+        socket.write(zipped);
+      } else {
+        socket.write(
+          `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${buffer.length}\r\n\r\n${message}`
+        );
+      }
+    } else if (path === "/user-agent") {
+      const userAgent =
+        data
+          .toString()
+          .split("\r\n")
+          .find((header) => header.startsWith("User-Agent"))
+          ?.split(": ")[1] || "";
 
-	let dataBuffer = "";
+      socket.write(
+        `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${userAgent.length}\r\n\r\n${userAgent}`
+      );
+    } else if (path.startsWith("/files/") && method === "POST") {
+      const fileName = path.split("/")[2];
+      const parts = data.toString().split("\r\n\r\n");
+      const reqBody = parts.pop() || "";
 
-	socket.on("data", (chunk) => {
-		dataBuffer += chunk.toString();
-		const requestEnd = dataBuffer.indexOf("\r\n\r\n");
-		if (requestEnd !== -1) {
-			const request = dataBuffer.slice(0, requestEnd);
-			const requestBody = dataBuffer.slice(requestEnd + 4);
-			const requestLines = request.split("\r\n");
-			const requestLine = requestLines[0];
-			const [method, url] = requestLine.split(" ");
+      writeFile(fileName, reqBody);
 
-			const headers = requestLines.slice(1).reduce(
-				(acc, line) => {
-					if (line.includes(": ")) {
-						const [key, value] = line.split(": ");
-						acc[key.toLowerCase()] = value;
-					}
-					return acc;
-				},
-				{} as Record<string, string>,
-			);
+      socket.write("HTTP/1.1 201 Created\r\n\r\n");
+    } else if (path.startsWith("/files/")) {
+      const fileName = path.split("/")[2];
+      const dir = argv[argv.length - 1];
 
-			const acceptEncoding = headers["accept-encoding"] || "";
-			const encodings = acceptEncoding.split(",").map((enc) => enc.trim());
-			const supportsGzip = encodings.includes("gzip");
+      try {
+        const file = readFileSync(`${dir}/${fileName}`, "utf8");
 
-			if (method === "GET") {
-				if (url.startsWith("/echo/")) {
-					const echoStr = url.slice(6);
-					socket.write("HTTP/1.1 200 OK\r\n");
-					if (supportsGzip) {
-						socket.write("Content-Encoding: gzip\r\n");
-					}
-					socket.write("Content-Type: text/plain\r\n");
-					socket.write(`Content-Length: ${Buffer.byteLength(echoStr)}\r\n\r\n`);
-					socket.write(echoStr);
-				} else if (url === "/" || url === "/index.html") {
-					const body =
-						"<html><body><h1>Welcome to the home page!</h1></body></html>";
-					socket.write("HTTP/1.1 200 OK\r\n");
-					socket.write("Content-Type: text/html\r\n");
-					socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`);
-					socket.write(body);
-				} else if (url === "/user-agent") {
-					const userAgent = headers["user-agent"] || "";
-					socket.write("HTTP/1.1 200 OK\r\n");
-					socket.write("Content-Type: text/plain\r\n");
-					socket.write(
-						`Content-Length: ${Buffer.byteLength(userAgent)}\r\n\r\n`,
-					);
-					socket.write(userAgent);
-				} else if (url.startsWith("/files/")) {
-					const filePath = path.join(directory, url.slice(7));
-					fs.readFile(filePath, (err, fileData) => {
-						if (err) {
-							const body = "404 Not Found";
-							socket.write("HTTP/1.1 404 Not Found\r\n");
-							socket.write("Content-Type: text/html\r\n");
-							socket.write(
-								`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`,
-							);
-							socket.write(body);
-						} else {
-							socket.write("HTTP/1.1 200 OK\r\n");
-							socket.write("Content-Type: application/octet-stream\r\n");
-							socket.write(`Content-Length: ${fileData.length}\r\n\r\n`);
-							socket.write(fileData);
-						}
-						socket.end();
-					});
-					return;
-				} else {
-					const body = "<html><body><h1>404 Not Found</h1></body></html>";
-					socket.write("HTTP/1.1 404 Not Found\r\n");
-					socket.write("Content-Type: text/html\r\n");
-					socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`);
-					socket.write(body);
-				}
-			} else if (method === "POST") {
-				if (url.startsWith("/files/")) {
-					const filePath = path.join(directory, url.slice(7));
-					fs.writeFile(filePath, requestBody, (err) => {
-						if (err) {
-							console.error("File write error:", err);
-							socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
-						} else {
-							socket.write("HTTP/1.1 201 Created\r\n\r\n");
-						}
-						socket.end();
-					});
-					return;
-				}
+        if (file) {
+          socket.write(
+            `HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${file.length}\r\n\r\n${file}`
+          );
+        } else {
+          socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        }
+      } catch {
+        socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      }
+    } else {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    }
 
-				socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-				socket.end();
-			} else {
-				const body =
-					"<html><body><h1>405 Method Not Allowed</h1></body></html>";
-				socket.write("HTTP/1.1 405 Method Not Allowed\r\n");
-				socket.write("Content-Type: text/html\r\n");
-				socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`);
-				socket.write(body);
-				socket.end();
-			}
-		}
-	});
-
-	socket.on("error", (err) => {
-		console.error("Socket error:", err);
-	});
+    socket.end();
+  });
 });
 
-server.on("error", (err) => {
-	throw err;
-});
+function writeFile(filename: string, contents: string) {
+  writeFileSync(path.join(directory, filename), contents);
+}
 
-server.listen(4221, () => {
-	console.log("Server is running on port 4221");
+server.listen(4221, "localhost", () => {
+  console.log("Server is running on port 4221");
 });
