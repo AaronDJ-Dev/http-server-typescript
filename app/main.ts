@@ -1,15 +1,42 @@
 import * as net from 'net';
+import * as path from 'path';
 import HTTPHandler from './handlers/http';  // Adjust the import path as needed
 
-const directoryPath = process.argv[3] || './'; // Default to current directory if not provided
-const httpHandler = new HTTPHandler(directoryPath);
+// Function to display help message
+function displayHelp() {
+    console.log(`Usage: node main.js [--directory <directory>] [--help | -h]
+Options:
+  --directory <directory>  Serve files from the specified directory.
+  --help, -h               Show this help message and exit.
+`);
+    process.exit(0);
+}
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+let directory = process.cwd(); // Default directory
+if (args.includes("--help") || args.includes("-h")) {
+    displayHelp();
+}
+const directoryFlagIndex = args.indexOf("--directory");
+if (directoryFlagIndex !== -1 && directoryFlagIndex < args.length - 1) {
+    directory = args[directoryFlagIndex + 1];
+} else if (directoryFlagIndex !== -1) {
+    console.error("Error: --directory flag requires a directory path");
+    displayHelp();
+}
+
+// Create an instance of HTTPHandler
+const httpHandler = new HTTPHandler(directory);
 
 const server = net.createServer((socket) => {
     httpHandler.handleRawRequest(socket);
 });
 
-console.log("Logs from your program will appear here!");
+server.on("error", (err) => {
+    throw err;
+});
 
-server.listen(4221, 'localhost', () => {
-    console.log('Server is running on port 4221');
+server.listen(4221, () => {
+    console.log("Server is running on port 4221");
 });
