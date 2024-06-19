@@ -1,9 +1,7 @@
 import * as net from 'net';
 
 const server = net.createServer((socket) => {
-    socket.write("HTTP/1.1 200 OK\r\n\r\n");
-    socket.end();
-    socket.on('data',(data)=>{
+    socket.on('data', (data) => {
         const request = data.toString();
         const path = request.split(' ')[1];
         const response = path === '/' ? 'HTTP/1.1 200 OK\r\n\r\n' : 'HTTP/1.1 404 Not Found\r\n\r\n';
@@ -11,5 +9,8 @@ const server = net.createServer((socket) => {
         socket.end();
     })
 });
+console.log("Logs from your program will appear here!");
 
-server.listen(4221, "localhost");
+server.listen(4221, 'localhost', () => {
+    console.log('Server is running on port 4221');
+});
