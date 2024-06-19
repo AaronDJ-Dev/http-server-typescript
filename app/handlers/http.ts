@@ -1,5 +1,6 @@
 import { Socket } from 'net';
 import * as fs from 'fs';
+import * as zlib from 'zlib';
 
 export default class HTTPHandler {
     private readonly directoryPath: string;
@@ -53,39 +54,54 @@ export default class HTTPHandler {
             }
         }
         if (body) {
-            response += `Content-Length: ${body.length}\r\n`;
+            response += `Content-Length: ${Buffer.byteLength(body)}\r\n`;
             response += '\r\n';
             response += body;
         }
         response += '\r\n';
         return response;
     }
-    handleRawRequest(request: Socket): void {
+    private compressResponseBody(
+        body: string,
+        encoding: string,
+        callback: (err: Error | null, result: Buffer) => void
+    ): void {
+        switch (encoding) {
+            case 'gzip':
+                zlib.gzip(body, callback);
+                break;
+            case 'deflate':
+                zlib.deflate(body, callback);
+                break;
+            default:
+                callback(null, Buffer.from(body));
+        }
+    }
+    handleRawRequest(socket: Socket): void {
         console.log('Received request');
-        request.on('data', (data) => {
+        socket.on('data', (data) => {
             const requestString = data.toString();
             const headers = this.extractHeaders(requestString);
             const { method, path, protocol } = this.extractPath(requestString);
             const body = this.extractBody(requestString);
-            const isValidContentEncoding =
-                headers['Accept-Encoding'] === 'gzip' ||
-                headers['Accept-Encoding'] === 'deflate' ||
-                headers['Accept-Encoding'] === 'br' ||
-                headers['Accept-Encoding'] === 'zstd';
+            const acceptEncoding = headers['accept-encoding'] || '';
+            const encodings = acceptEncoding.split(',').map((enc) => enc.trim());
+            const supportedEncodings = ['gzip', 'deflate'];
+            const selectedEncoding = encodings.find((enc) => supportedEncodings.includes(enc)) || '';
+
             console.log('Request headers:', headers);
             console.log('Request method:', method);
             console.log('Request path:', path);
             console.log('Request protocol:', protocol);
             console.log('Request body:', body);
+
             let response;
             switch (path[0]) {
                 case 'echo':
                     // Echo back path[1]
                     response = this.formHTTPResponse(200, 'OK', path[1], {
                         'Content-Type': 'text/plain',
-                        ...(isValidContentEncoding && {
-                            'Content-Encoding': headers['Accept-Encoding'],
-                        }),
+                        ...(selectedEncoding && { 'Content-Encoding': selectedEncoding }),
                     });
                     break;
                 case 'user-agent':
@@ -93,7 +109,7 @@ export default class HTTPHandler {
                     response = this.formHTTPResponse(
                         200,
                         'OK',
-                        headers['User-Agent'],
+                        headers['user-agent'],
                         {
                             'Content-Type': 'text/plain',
                         },
@@ -142,14 +158,33 @@ export default class HTTPHandler {
                         });
                     }
             }
+
             if (response) {
-                console.log('Sending response:', response);
-                request.write(response);
+                const [statusLine, ...responseHeadersAndBody] = response.split('\r\n');
+                const responseBodyIndex = responseHeadersAndBody.indexOf('');
+                const responseBody = responseHeadersAndBody.slice(responseBodyIndex + 1).join('\r\n');
+                const responseHeaders = responseHeadersAndBody.slice(0, responseBodyIndex).join('\r\n');
+
+                if (selectedEncoding) {
+                    this.compressResponseBody(responseBody, selectedEncoding, (err, compressedBody) => {
+                        if (err) {
+                            console.error('Error compressing response:', err);
+                            socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+                        } else {
+                            socket.write(statusLine + '\r\n' + responseHeaders + '\r\n' + `Content-Length: ${compressedBody.length}\r\n\r\n`);
+                            socket.write(compressedBody);
+                        }
+                        socket.end();
+                        console.log('Sent response and closed connection');
+                    });
+                } else {
+                    socket.write(response);
+                    socket.end();
+                    console.log('Sent response and closed connection');
+                }
             } else {
                 console.log('Response is undefined, not sending');
             }
-            request.end();
-            console.log('Sent response and closed connection');
         });
     }
 }
