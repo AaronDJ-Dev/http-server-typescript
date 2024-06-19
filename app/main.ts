@@ -1,24 +1,43 @@
-import * as net from 'net';
+import * as net from 'node:net';
 
-const server = net.createServer((socket: any) => {
-    console.log('Client is connected');
-    socket.on('data', (data: any) => {
-        const dataStr = data.toString();
-        console.log('Data received: ', dataStr);
-        const path = dataStr.split('\r\n')[0].split(' ')[1];
-        console.log('path', path);
-        const query = path.split('/')[2];
-        console.log('pathBody', query);
-        if (path === '/') {
-            socket.write('HTTP/1.1 200 OK\r\n\r\n');
-        } else if (path === `/echo/${query}`) {
-            socket.write(`HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${query.length}\r\n\r\n${query}`)
-        } else {
-            socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+const server = net.createServer((socket) => {
+    socket.on('data', (data) => {
+        const request = data.toString();
+        console.log(request);
+        const path = request.split(' ')[1];
+        console.log(path.split('/')[1])
+        const params = path.split('/')[1];
+        let response: string;
+        function changeResponse(response: string): void {
+            socket.write(response);
+            socket.end();
         }
-        console.log('Client diconnecting');
-        socket.end();
-    });
+        switch (params) {
+            case '': {
+                response = 'HTTP/1.1 200 OK\r\n\r\n'
+                changeResponse(response)
+                break;
+            }
+            case 'echo': {
+                const message = path.split('/')[2]
+                response = `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${message.length}\r\n\r\n${message}`
+                changeResponse(response)
+                break;
+            }
+            case 'user-agent': {
+                const userAgent = request.split('User-Agent: ')[1].split('\r\n')[0]
+                response = `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${userAgent.length}\r\n\r\n${userAgent}`
+                changeResponse(response)
+                break;
+            }
+            default: {
+                response = 'HTTP/1.1 404 Not Found\r\n\r\n'
+                changeResponse(response)
+                break;
+            }
+        }
+        socket.end()
+    })
 });
 
 console.log("Logs from your program will appear here!");
