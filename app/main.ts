@@ -1,21 +1,26 @@
 import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
+
 // Function to display help message
 function displayHelp() {
 	console.log(`Usage: node main.js [--directory <directory>] [--help | -h]
+
 Options:
   --directory <directory>  Serve files from the specified directory.
   --help, -h               Show this help message and exit.
 `);
 	process.exit(0);
 }
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 let directory = process.cwd(); // Default directory
+
 if (args.includes("--help") || args.includes("-h")) {
 	displayHelp();
 }
+
 const directoryFlagIndex = args.indexOf("--directory");
 if (directoryFlagIndex !== -1 && directoryFlagIndex < args.length - 1) {
 	directory = args[directoryFlagIndex + 1];
@@ -23,12 +28,16 @@ if (directoryFlagIndex !== -1 && directoryFlagIndex < args.length - 1) {
 	console.error("Error: --directory flag requires a directory path");
 	displayHelp();
 }
+
 const server = net.createServer((socket) => {
 	console.log("client connected");
+
 	socket.on("end", () => {
 		console.log("client disconnected");
 	});
+
 	let dataBuffer = "";
+
 	socket.on("data", (chunk) => {
 		dataBuffer += chunk.toString();
 		const requestEnd = dataBuffer.indexOf("\r\n\r\n");
@@ -38,6 +47,7 @@ const server = net.createServer((socket) => {
 			const requestLines = request.split("\r\n");
 			const requestLine = requestLines[0];
 			const [method, url] = requestLine.split(" ");
+
 			const headers = requestLines.slice(1).reduce(
 				(acc, line) => {
 					if (line.includes(": ")) {
@@ -48,9 +58,11 @@ const server = net.createServer((socket) => {
 				},
 				{} as Record<string, string>,
 			);
+
 			const acceptEncoding = headers["accept-encoding"] || "";
 			const encodings = acceptEncoding.split(",").map((enc) => enc.trim());
 			const supportsGzip = encodings.includes("gzip");
+
 			if (method === "GET") {
 				if (url.startsWith("/echo/")) {
 					const echoStr = url.slice(6);
@@ -117,6 +129,7 @@ const server = net.createServer((socket) => {
 					});
 					return;
 				}
+
 				socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
 				socket.end();
 			} else {
@@ -130,13 +143,16 @@ const server = net.createServer((socket) => {
 			}
 		}
 	});
+
 	socket.on("error", (err) => {
 		console.error("Socket error:", err);
 	});
 });
+
 server.on("error", (err) => {
 	throw err;
 });
+
 server.listen(4221, () => {
 	console.log("Server is running on port 4221");
 });
